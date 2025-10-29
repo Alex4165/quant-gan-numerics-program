@@ -1,5 +1,4 @@
-# Currently WIP
-# quant-gan-numerics-program
+# quant-gan-numerics-program (CURRENTLY WIP)
 Code for my a project at the University of Bordeaux concerning "Quant GANs: Deep Generation of Financial Time Series" by Wiese et al.
 
 ## TCN Shakespeare
