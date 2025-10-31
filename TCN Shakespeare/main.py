@@ -4,8 +4,8 @@ import numpy as np
 # Refer to "Quant GANs: Deep Generation of Financial Time Series" by Wiese et al. (2019)
 
 
-def LeakyReLU(x):
-        return np.maximum(0.1*x, x)
+def leaky_re_lu(x): return np.maximum(0.01 * x, x)
+def grad_leaky_re_lu(x): return np.where(x > 0, 1, 0.01)
 
 
 def softmax(x):
@@ -24,10 +24,11 @@ class VanillaTCN:
             raise ValueError("Dilation list, kernel size list, and hidden layer size list must have the same length.")
         self.depth = len(dilations)
         self.T_f = 1 + sum([d * (k - 1) for d, k in zip(dilations, kernel_sizes)])  # receptive field size
+        self.node_vals = [0 for _ in range(self.depth)]  # to store intermediate values for backpropagation
 
         self.used_node_idx = self.initialize_used_node_indices()
-        self.weights = self.initalize_weights()
-        self.biases = [np.zeros((h,)) for h in hidden_sizes]
+        self.weights, self.dw = self.initalize_weights()
+        self.biases, self.db = [np.zeros((h,)) for h in hidden_sizes], [np.zeros((h,)) for h in hidden_sizes]
 
     def initalize_weights(self):
         # follows def 3.5
@@ -38,7 +39,7 @@ class VanillaTCN:
                 weights[i] = np.random.randn(k, self.input_size, self.hidden_sizes[i]).astype(np.float32)
             else:
                 weights[i] = np.random.randn(k, self.hidden_sizes[i-1], self.hidden_sizes[i]).astype(np.float32)
-        return weights
+        return weights, weights.copy()
 
     def initialize_used_node_indices(self):
         idx = np.zeros((self.depth, self.T_f), dtype=bool)
@@ -64,15 +65,44 @@ class VanillaTCN:
                 layer_output[:, j] += self.biases[i]
 
             if i != 0:
-                layer_input = LeakyReLU(layer_output)
+                layer_input = leaky_re_lu(layer_output)
             else:
                 layer_input = softmax(layer_output[:, -1])  # only last time step is relevant for output
 
+            self.node_vals[i] = layer_output
+
         # cross-entropy loss
-        loss = - np.sum(output * np.log(layer_input + 1e-8)) / inputs.shape[0]
+        loss = - np.sum(output * np.log(layer_input + 1e-8))
 
-        # gradients
+        # gradient computation
+        # Last node by hand
+        D, K, N_O, N_I = self.dilations[0], self.kernel_sizes[0], self.hidden_sizes[0], self.hidden_sizes[1]
+        dL = layer_input - output  # shape: (N_0, )
+        self.dw[0] = np.array([[[dL[m]*self.node_vals[j, -1-D*(K-i)] for j in range(N_I)]
+                                for i in range(1, K+1)]
+                               for m in range(N_O)])  # (K, N_I, N_O)
+        self.db[0] = dL  # (N_O, )
 
+        dL_dphi = np.zeros((N_O, self.T_f))  # (N_O, T_f)
+        dL_dphi[:, -1] = dL
+        # Remaining nodes done iteratively
+        for i in range(1, self.depth):
+            D, K, N_O = self.dilations[i], self.kernel_sizes[i], self.hidden_sizes[i]
+            N_I = self.hidden_sizes[i+1] if i+1 != self.depth else self.input_size
+            
+            # calculate dL/df = sum dL/dphi * dphi/df (for phi from prev layer)
+            dL_df = np.zeros((N_O, self.T_f), dtype=np.float32)
+            for i0 in self.used_node_idx[i-1].nonzero()[0]:  # parent index
+                for k in range(1, K+1):
+                    i = i0 - D*(K-k)  # child index
+                    dL_df[:, i] += np.matmul(self.weights[i-1][k, :, :], dL_dphi[:, i0])
+
+            # calculate dL/dphi
+            dL_dphi = dL_df * grad_leaky_re_lu(self.node_vals[i])
+
+            # calculate dL/dw and dL/db
+            # TODO: do we really need to store all gradients?
+            #  I guess yes since we want to do momentum. Also useful for batch updates.
 
 
 if __name__ == "__main__":
