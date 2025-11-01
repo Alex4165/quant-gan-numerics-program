@@ -7,10 +7,11 @@ I wanted to experiment with (vanilla) Temporal Convolutional Networks (TCN), in 
 Currently uses a vanilla momentum backprop. Next I'll add dropout.
 
 Here is a string the model (which overfitted on a subset of the dataset) produced when prompted with "To be, or not to be" (which is not in the dataset):
-To be, or not to ber thib res: nor aff rearmi sa az nunond treair thit
+
+"To be, or not to ber thib res: nor aff rearmi sa az nunond treair thit
  tsrmh frisver ron n.a
 gannnoo; vits eir them we gf hor
 rntsl Saicnann toanies us giaan.
 
 nlous dirglef thawd gflF re ass mi ncefnreare shln
-zgifs, 
+zgifs, "
