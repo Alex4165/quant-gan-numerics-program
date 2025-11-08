@@ -15,13 +15,15 @@ def softmax(x):
 
 class VanillaTCN:
     def __init__(self, input_size: int, dilations: List[int], kernel_sizes: List[int], hidden_sizes: List[int],
-                 weight_scale: float = 0.1, bias_init: float = 1, input_p_keep=1.0, hidden_p_keep=1.0):
+                 weight_scale: float = 0.1, bias_init: float = 0.1, input_p_keep=1.0, hidden_p_keep=1.0,
+                 grad_clip: float = 1.0):
         self.input_size = input_size
         self.dilations = dilations
         self.kernel_sizes = kernel_sizes
         self.hidden_sizes = hidden_sizes
         self.input_p_keep, self.hidden_p_keep = input_p_keep, hidden_p_keep  # dropout
         self.t = 1  # time index for Adam
+        self.grad_clip = grad_clip
 
         if not (len(dilations) == len(kernel_sizes) == len(hidden_sizes)):
             raise ValueError("Dilation list, kernel size list, and hidden layer size list must have the same length.")
@@ -35,15 +37,16 @@ class VanillaTCN:
         self.rw, self.rb = [np.zeros_like(w) for w in self.weights], [np.zeros_like(b) for b in self.biases]
         self.vw, self.vb = [np.zeros_like(w) for w in self.weights], [np.zeros_like(b) for b in self.biases]
 
-    def initalize_weights(self, scale: float):
+    def initalize_weights(self, scale=0.1):
+        """He initialization"""
         # follows def 3.5
         # convention is that we go from output to input layers (so 0 is output layer, depth-1 is first hidden layer)
         weights = [np.ndarray for _ in range(self.depth)]
         for i, d, k in zip(range(self.depth), self.dilations, self.kernel_sizes):
-            if i == self.depth - 1:
-                weights[i] = scale*np.random.randn(k, self.input_size, self.hidden_sizes[i]).astype(np.float32)
+            if i == self.depth - 1:  # first hidden layer
+                weights[i] = scale * np.random.randn(k, self.input_size, self.hidden_sizes[i]).astype(np.float32)
             else:
-                weights[i] = scale*np.random.randn(k, self.hidden_sizes[i+1], self.hidden_sizes[i]).astype(np.float32)
+                weights[i] = scale * np.random.randn(k, self.hidden_sizes[i+1], self.hidden_sizes[i]).astype(np.float32)
         return weights, [np.zeros_like(w) for w in weights]  # dw initialized to zeros
 
     def scale_grads(self, scale):
@@ -58,7 +61,7 @@ class VanillaTCN:
             for j in idx[i-1].nonzero()[0]:
                 for k in range(self.kernel_sizes[i-1]):
                     idx[i, j - self.dilations[i-1]*k] = 1
-        print(f"Used nodes matrix: \n {idx.astype(int)}")
+        # print(f"Used nodes matrix: \n {idx.astype(int)}")
         return idx
 
     def train_minibatch(self, inputs_batch, targets_batch, learning_rate: float = 0.001,
@@ -71,23 +74,24 @@ class VanillaTCN:
 
         for i in range(m):
             total_loss += self.update_gradients(inputs_batch[i], targets_batch[i], do_dropout=not return_loss)
+
+        if return_loss:
+            print(f"Average gradient norm: {np.mean([np.abs(self.dw[i]).mean() for i in range(self.depth)])}")
+            return total_loss / m  # don't update weights
+
         self.scale_grads(1/m)
         for i in range(self.depth):
             self.vw[i] = (rho_1 * self.vw[i] + (1 - rho_1) * self.dw[i])
             self.vb[i] = (rho_1 * self.vb[i] + (1 - rho_1) * self.db[i])
 
-            self.rw[i] = (rho_2 * self.rw[i] + (1 - rho_2) * (self.dw[i] ** 2))
-            self.rb[i] = (rho_2 * self.rb[i] + (1 - rho_2) * (self.db[i] ** 2))
+            # self.rw[i] = (rho_2 * self.rw[i] + (1 - rho_2) * (self.dw[i] ** 2))
+            # self.rb[i] = (rho_2 * self.rb[i] + (1 - rho_2) * (self.db[i] ** 2))
 
-            self.weights[i] += (- learning_rate * (self.vw[i]/(1 - rho_1**self.t)) /
-                                (np.sqrt(self.rw[i]/(1 - rho_2**self.t)) + 1e-8))
-            self.biases[i] += (- learning_rate * (self.vb[i]/(1 - rho_1**self.t)) /
-                               (np.sqrt(self.rb[i]/(1 - rho_2**self.t)) + 1e-8))
-
+            self.weights[i] += - learning_rate * (self.vw[i]/(1 - rho_1**self.t))
+                                # / (np.sqrt(self.rw[i]/(1 - rho_2**self.t)) + 1e-8))
+            self.biases[i] += - learning_rate * (self.vb[i]/(1 - rho_1**self.t))
+                               # / (np.sqrt(self.rb[i]/(1 - rho_2**self.t)) + 1e-8))
         self.t += 1
-
-        if return_loss:
-            return total_loss / m
 
     def update_gradients(self, inputs, target, do_dropout=True):
         output, loss = self.forward_pass(inputs, target, do_dropout=do_dropout)
@@ -99,8 +103,8 @@ class VanillaTCN:
         D, K, N_O = self.dilations[0], self.kernel_sizes[0], self.hidden_sizes[0]
         dL = output - target  # shape: (N_0, )
         idx = -1 - D * (K - np.arange(K) - 1)  # indices of child nodes
-        self.dw[0] = leaky_re_lu(self.node_vals[1][:, idx].T)[:, :, None] * dL
-        self.db[0] = dL  # (N_O, )
+        self.dw[0] += leaky_re_lu(self.node_vals[1][:, idx].T)[:, :, None] * dL
+        self.db[0] += dL  # (N_O, )
 
         # copilot solution:
         dL_dphi = np.zeros((N_O, self.T_f))
@@ -131,6 +135,11 @@ class VanillaTCN:
                 contrib_w = np.tensordot(sel, dLj, axes=([2], [1]))
                 self.dw[i] += contrib_w
                 self.db[i] += dLj.sum(axis=1)
+
+            # Clip gradients:
+            self.dw[i] = np.clip(self.dw[i], -self.grad_clip, self.grad_clip)
+
+
         # # Notation below is phi is the convolution (output) and f is the activation function (output)
         # dL_dphi = np.zeros((N_O, self.T_f))  # (N_O, T_f)
         # dL_dphi[:, -1] = dL
