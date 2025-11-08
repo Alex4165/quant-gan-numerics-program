@@ -1,21 +1,29 @@
+import time
+
 import numpy as np
 from tcn import VanillaTCN
 
 if __name__ == "__main__":
     # --- hyperparameters ---
     # training
-    momentum = 0.9
-    learning_rate = 0.01
-    batch_size = 16
-    max_epochs = 20
-    early_stop_rel_tol = 5e-3
+    momentum = 0.5
+    learning_rate = 0.0001
+    rho_1, rho_2 = 0.9, 0.999  # Adam params
+    dropout_input_p_keep = 0.8
+    dropout_hidden_p_keep = 0.5
+
+    batch_size = 5  # number of backprop steps = O(batch_size * data_size * epochs)
+    max_epochs = 100
+    early_stop_rel_tol = 1e-3
     data_size = 1000  # limit data size for faster training, -1 for full data
 
     # model
-    depth = 4
-    kernel_size = 2
+    copies = 3  # copies of kernel-dilation list, so final_depth = depth * copies, see below
+    depth = 3
+    kernel_size = 3
     dilation_size = 2
-    hidden_size = 64
+    hidden_size = 20
+    # num parameters = O(depth * kernel_size * hidden_size^2)
 
     # generation
     seed_text = "To be, or not to be"
@@ -29,20 +37,27 @@ if __name__ == "__main__":
     char_to_idx = {ch: i for i, ch in enumerate(chars)}
     idx_to_char = {i: ch for i, ch in enumerate(chars)}
     vocab_size = len(chars)
-    print("Vocab size:", vocab_size)
-
     text = text[:data_size]
 
-    dilations = [dilation_size**i for i in range(depth-1, -1, -1)]
-    kernel_sizes = [kernel_size for _ in range(depth)]
-    hidden_sizes = [vocab_size] + [hidden_size for _ in range(depth-1)]
+    # model init
+    dilations = copies * [dilation_size**i for i in range(depth-1, -1, -1)]
+    kernel_sizes = copies * [kernel_size for _ in range(depth)]
+    hidden_sizes = [vocab_size] + [hidden_size for _ in range(copies * depth-1)]
     model = VanillaTCN(input_size=vocab_size, dilations=dilations,
-                       kernel_sizes=kernel_sizes, hidden_sizes=hidden_sizes)
+                       kernel_sizes=kernel_sizes, hidden_sizes=hidden_sizes,
+                       input_p_keep=dropout_input_p_keep, hidden_p_keep=dropout_hidden_p_keep)
     T_f = model.T_f
+
+    # --- print info ---
+    print("Vocab size:", vocab_size)
+    print(f"proportion ensemble disconnected approx: {(1-dropout_hidden_p_keep)**sum(model.used_node_idx[2]):.0e}")
     print("Receptive field:", T_f)
     print("Parameters:", sum([w.size for w in model.weights]) + sum([b.size for b in model.biases]))
+    print(f"Expected number of total backprop evals: {batch_size * (len(text)-T_f) * max_epochs:.2e}")
+    # (depth-2)*(kernel_size*hidden_size**2+hidden_size)+2*kernel_size*hidden_size*vocab_size+vocab_size+hidden_size
 
     # --- training loop ---
+    t0 = time.time()
     prev_loss = 1e6
     end = len(text) - batch_size - 1
     for e in range(max_epochs):
@@ -55,12 +70,16 @@ if __name__ == "__main__":
                 targets_batch[b, char_to_idx[text[i + b]]] = 1
             if i == end:
                 loss = model.train_minibatch(inputs_batch, targets_batch,
-                                         momentum=momentum, learning_rate=learning_rate, return_loss=True)
+                                             rho_1=rho_1, rho_2=rho_2,
+                                             learning_rate=learning_rate, return_loss=True)
             else:
                 model.train_minibatch(inputs_batch, targets_batch,
-                                      momentum=momentum, learning_rate=learning_rate)
+                                      rho_1=rho_1, rho_2=rho_2,
+                                      learning_rate=learning_rate)
 
-        print(f"Epoch {e+1}/{max_epochs}, Loss: {loss:.4f}")
+        print(f"Epoch {e+1}/{max_epochs}, Loss (on final batch): {loss:.4f} "
+              f"(i.e. avg. prob. assigned: {np.exp(-loss):.4f}) "
+              f"time elapsed: {time.time() - t0:.0f}s eta: {(time.time() - t0)/(e+1)*(max_epochs - e - 1)/60:.1f}m")
         if abs(prev_loss - loss)/max(loss, prev_loss, 1e-8) < early_stop_rel_tol:
             print("Converged, stopping training")
             break
@@ -75,7 +94,7 @@ if __name__ == "__main__":
         input_seq = np.zeros((vocab_size, T_f), dtype=np.float32)
         for t in range(T_f):
             input_seq[char_to_idx[seed_text[-T_f + t]], t] = 1
-        output_probs = model.forward_pass(input_seq)
+        output_probs = model.forward_pass(input_seq, do_dropout=False)
         next_char_idx = np.random.choice(range(vocab_size), p=output_probs.ravel())
         seed_text += idx_to_char[next_char_idx]
 
