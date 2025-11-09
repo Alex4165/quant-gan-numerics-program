@@ -25,7 +25,7 @@ if __name__ == "__main__":
     dropout_input_p_keep = 1  # the model is really sensitive to dropout, so we turn it off for now
     dropout_hidden_p_keep = 1
 
-    max_epochs = 1000
+    max_epochs = 1500
     validation_size = 1000
     data_index = 50000
     batch_size = 1000
