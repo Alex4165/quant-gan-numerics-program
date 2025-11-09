@@ -1,11 +1,14 @@
 from typing import List
 import numpy as np
 
+
 # Refer to "Quant GANs: Deep Generation of Financial Time Series" by Wiese et al. (2019) for TCN
 # definitions and conventions
 
 
 def leaky_re_lu(x): return np.maximum(0.1 * x, x)
+
+
 def grad_leaky_re_lu(x): return np.where(x > 0, 1, 0.1)
 
 
@@ -30,11 +33,12 @@ class VanillaTCN:
             raise ValueError("Dilation list, kernel size list, and hidden layer size list must have the same length.")
         self.depth = len(dilations)
         self.T_f = 1 + sum([d * (k - 1) for d, k in zip(dilations, kernel_sizes)])  # receptive field size
-        self.node_vals = [0 for _ in range(self.depth+1)]  # to store intermediate values for backpropagation
+        self.node_vals = [0 for _ in range(self.depth + 1)]  # to store intermediate values for backpropagation
 
         self.used_node_idx = self.initialize_used_node_indices()
         self.weights, self.dw = self.initalize_weights(weight_scale)
-        self.biases, self.db = [bias_init+np.zeros((h,)) for h in hidden_sizes], [np.zeros((h,)) for h in hidden_sizes]
+        self.biases, self.db = [bias_init + np.zeros((h,)) for h in hidden_sizes], [np.zeros((h,)) for h in
+                                                                                    hidden_sizes]
         self.rw, self.rb = [np.zeros_like(w) for w in self.weights], [np.zeros_like(b) for b in self.biases]
         self.vw, self.vb = [np.zeros_like(w) for w in self.weights], [np.zeros_like(b) for b in self.biases]
 
@@ -47,7 +51,8 @@ class VanillaTCN:
             if i == self.depth - 1:  # first hidden layer
                 weights[i] = scale * np.random.randn(k, self.input_size, self.hidden_sizes[i]).astype(np.float32)
             else:
-                weights[i] = scale * np.random.randn(k, self.hidden_sizes[i+1], self.hidden_sizes[i]).astype(np.float32)
+                weights[i] = scale * np.random.randn(k, self.hidden_sizes[i + 1], self.hidden_sizes[i]).astype(
+                    np.float32)
         return weights, [np.zeros_like(w) for w in weights]  # dw initialized to zeros
 
     def scale_grads(self, scale):
@@ -59,9 +64,9 @@ class VanillaTCN:
         idx = np.zeros((self.depth, self.T_f), dtype=bool)
         idx[0, -1] = 1  # last node in last layer is only one used
         for i in range(1, self.depth):
-            for j in idx[i-1].nonzero()[0]:
-                for k in range(self.kernel_sizes[i-1]):
-                    idx[i, j - self.dilations[i-1]*k] = 1
+            for j in idx[i - 1].nonzero()[0]:
+                for k in range(self.kernel_sizes[i - 1]):
+                    idx[i, j - self.dilations[i - 1] * k] = 1
         # print(f"Used nodes matrix: \n {idx.astype(int)}")
         return idx
 
@@ -73,8 +78,8 @@ class VanillaTCN:
         self.scale_grads(0)
 
         for i in range(m):
-            total_loss += self.update_gradients(inputs_batch[i], targets_batch[i], do_dropout=not update_weights)
-        self.scale_grads(1/m)
+            total_loss += self.update_gradients(inputs_batch[i], targets_batch[i], do_dropout=update_weights)
+        self.scale_grads(1 / m)
 
         if not update_weights:
             return total_loss / m
@@ -82,19 +87,25 @@ class VanillaTCN:
             self.vw[i] = (rho_1 * self.vw[i] + (1 - rho_1) * self.dw[i])
             self.vb[i] = (rho_1 * self.vb[i] + (1 - rho_1) * self.db[i])
 
-            self.rw[i] = (rho_2 * self.rw[i] + (1 - rho_2) * (self.dw[i] ** 2))
-            self.rb[i] = (rho_2 * self.rb[i] + (1 - rho_2) * (self.db[i] ** 2))
+            if rho_2 > 0:
+                self.rw[i] = (rho_2 * self.rw[i] + (1 - rho_2) * (self.dw[i] ** 2))
+                self.rb[i] = (rho_2 * self.rb[i] + (1 - rho_2) * (self.db[i] ** 2))
 
-            self.weights[i] += (- learning_rate * (self.vw[i]/(1 - rho_1**self.t))
-                                / (np.sqrt(self.rw[i]/(1 - rho_2**self.t)) + 1e-8))
-            self.biases[i] += (- learning_rate * (self.vb[i]/(1 - rho_1**self.t))
-                               / (np.sqrt(self.rb[i]/(1 - rho_2**self.t)) + 1e-8))
+                self.weights[i] += (- learning_rate * (self.vw[i] / (1 - rho_1 ** self.t))
+                                    / (np.sqrt(self.rw[i] / (1 - rho_2 ** self.t)) + 1e-8))
+                self.biases[i] += (- learning_rate * (self.vb[i] / (1 - rho_1 ** self.t))
+                                   / (np.sqrt(self.rb[i] / (1 - rho_2 ** self.t)) + 1e-8))
+            else:
+                self.weights[i] += - learning_rate * (self.vw[i] / (1 - rho_1 ** self.t))
+                self.biases[i] += - learning_rate * (self.vb[i] / (1 - rho_1 ** self.t))
         self.t += 1
 
         return total_loss / m
 
     def update_gradients(self, inputs, target, do_dropout=True):
         output, loss = self.forward_pass(inputs, target, do_dropout=do_dropout)
+        if not do_dropout:
+            return loss
         self.back_prop(output, target)
         return loss
 
@@ -160,13 +171,14 @@ class VanillaTCN:
             contrib = np.matmul(w, sel).sum(axis=0)
             layer_output[:, js] = contrib + self.biases[i][:, None]
 
-            if do_dropout and i > 1:  # no dropout on final two layers (since sparse)
+            if do_dropout and i > 2:  # no dropout on final three layers (since sparse)
                 mask = (np.random.rand(*layer_output.shape) < self.hidden_p_keep).astype(np.float32)
                 layer_output *= mask / self.hidden_p_keep  # weight scaling done during training
 
             if i != 0:
                 layer_input = leaky_re_lu(layer_output)
             else:
+                layer_output += inputs  # identity skip connection on most recent input
                 layer_input = softmax(layer_output[:, -1])  # only last time step is relevant for output
 
             self.node_vals[i] = layer_output  # store pre-activation values for backprop
@@ -223,12 +235,3 @@ if __name__ == "__main__":
     print("numerical:", float(numerical))
     rel_err = abs(analytic - numerical) / max(abs(numerical), abs(analytic), 1e-8)
     print("relative error:", rel_err)
-
-
-
-
-
-
-
-
-

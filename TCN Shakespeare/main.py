@@ -1,6 +1,8 @@
 import time
 
 import numpy as np
+from matplotlib import pyplot as plt
+
 from tcn import VanillaTCN
 import pickle
 
@@ -18,30 +20,30 @@ def get_training_batch(idx, data, batch_length):
 if __name__ == "__main__":
     # --- hyperparameters ---
     # training
-    learning_rate = 0.00001
-    rho_1, rho_2 = 0.9, 0.999  # Adam params
-    dropout_input_p_keep = 0.9
-    dropout_hidden_p_keep = 0.5
+    learning_rate = 0.00005
+    rho_1, rho_2 = 0.9, 0.999  # Adam params. Set rho_2=0 for bias corrected momentum only
+    dropout_input_p_keep = 1  # the model is really sensitive to dropout, so we turn it off for now
+    dropout_hidden_p_keep = 1
 
-    batch_size = 5
-    max_epochs = 100
-    validation_size = 5000
-    data_index = -validation_size-1  # limit data size for faster training, -1 for full data
+    max_epochs = 1000
     validation_size = 1000
-    data_index = 5000
-    # number of backprop steps = O(batch_size * data_size * epochs)
+    data_index = 50000
+    batch_size = 1000
+    # batch_size = np.ceil(1e-2 * data_index).astype(int) if data_index > 0 else 100
+    # number of backprop steps = O(data_size * epochs)
 
     # model
-    copies = 3  # copies of kernel-dilation list, so final_depth = depth * copies, see below
-    depth = 3
-    kernel_size = 5
-    dilation_size = 2
-    hidden_size = 64
+    copies = 1  # copies of kernel-dilation list, so final_depth = depth * copies, see below
+    depth = 3  # we use less depth to decrease gradient explosion/vanishing
+    kernel_size = 5  # larger kernels effectively allow the network to memorize words
+    dilation_size = 2  # dilation still allows large receptive field
+    hidden_size = 70  # (larger than) vocab size is a natural choice
     # num parameters = O(copies * depth * kernel_size * hidden_size^2)
 
     # generation
     seed_text = "To be, or not to be"
     generation_length = 50
+    num_plots_shown = 5
 
     # --- data ---
     file = "input.txt"
@@ -67,30 +69,52 @@ if __name__ == "__main__":
     print("Vocab size:", vocab_size)
     print(f"Total available data size: {len(text):.2e} "
           f"(using {data_index + validation_size if data_index > 0 else len(text) :.2e})")
-    print(f"proportion dropout disconnected approx: {(1 - dropout_hidden_p_keep) ** sum(model.used_node_idx[2]):.0e}")
+    if depth*copies > 3:
+        print(f"proportion dropout disconnected approx: {(1 - dropout_hidden_p_keep) ** sum(model.used_node_idx[3]):.0e}")
     print("Receptive field:", T_f)
     print(f"Parameters: {sum([w.size for w in model.weights]) + sum([b.size for b in model.biases]):.2e}")
-    print(f"Expected number of total backprop evals: {batch_size * (len(training_data) - T_f) * max_epochs:.2e}")
+    print(f"Expected number of total backprop evals: {(len(training_data) - T_f) * max_epochs:.2e}")
     print("------------------------------------------------------------------------------")
 
     # --- training loop ---
-    t0 = time.time()
     prev_loss = 1e6
     end_idx = len(training_data) - batch_size
     if end_idx + 1 <= T_f:
         raise ValueError("Dataset length too short")
+    num_batches = (len(training_data) - T_f) // batch_size
+    if num_batches * batch_size + T_f < len(training_data):
+        print(f"Warning not using last {len(training_data) - (num_batches * batch_size + T_f)} "
+              f"characters in training data")
+        # TODO: could add to validation set instead
+    t0 = time.time()
     for e in range(max_epochs):
         # --- training epoch ---
-        training_loss = 0
-        for i in range(T_f, end_idx + 1):
-            inputs_batch, targets_batch = get_training_batch(i, training_data, batch_size)
-            training_loss += model.train_minibatch(inputs_batch, targets_batch,
-                                                   rho_1=rho_1, rho_2=rho_2,
-                                                   learning_rate=learning_rate)
+        training_losses = np.zeros(num_batches)
+        for i in range(num_batches):
+            inputs_batch, targets_batch = get_training_batch(T_f + i * batch_size, training_data, batch_size)
+            l = model.train_minibatch(inputs_batch, targets_batch,
+                                                             rho_1=rho_1, rho_2=rho_2,
+                                                             learning_rate=learning_rate)
+            if e == 0 and i < 10:
+                print(f"initial training losses of batch {i+1}: {l:.4f}")
+            elif e == 0 and i == 10:
+                print(f"ETA: {(time.time() - t0) / 10 * num_batches * max_epochs / 60:.1f}m")
+            if l > 30:
+                print(f"Warning blew up. Reduce learning rate from {learning_rate}")
+                break
+            training_losses[i] = l
+        if e % (max_epochs // num_plots_shown) == 0:
+            plt.plot(training_losses)
+            plt.title(f"Epoch {e + 1} training losses")
+            plt.xlabel("Character predicted")
+            plt.ylabel("Loss")
+            plt.axhline(y=np.log(vocab_size), color='r', linestyle='--', label='random guess loss')
+            plt.show()
 
+        # --- validation ---
         inputs_batch, targets_batch = get_training_batch(T_f, validation_data, len(validation_data) - T_f)
         validation_loss = model.train_minibatch(inputs_batch, targets_batch, update_weights=False)
-        print(f"Epoch {e + 1}/{max_epochs} | avg training loss {training_loss/(end_idx+1-T_f):.4f} | "
+        print(f"Epoch {e + 1}/{max_epochs} | avg training loss {np.mean(training_losses):.4f} | "
               f"validation loss {validation_loss:.4f} | "
               f"eta {(time.time() - t0) / (e + 1) * (max_epochs - e - 1) / 60:.1f}m")
 
@@ -141,4 +165,3 @@ if __name__ == "__main__":
 
     with open("model_checkpoint.pkl", "wb") as f:
         pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
-
