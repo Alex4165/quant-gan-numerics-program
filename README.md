@@ -5,6 +5,7 @@ Code for a project concerning "Quant GANs: Deep Generation of Financial Time Ser
 I wanted to experiment with (vanilla) Temporal Convolutional Networks (TCN), in particular test their performance and become more comfortable with their workings. To do this I implemented a TCN from scratch (i.e. using only numpy) and trained it for next-character-prediction on a text file of some colleceted pieces of Shakespeare (the idea and data for which are taken from Karpathy's blog: https://karpathy.github.io/2015/05/21/rnn-effectiveness/).
 
 Currently uses a Adam optimization. Will write some notes here on the results soon.
+'''
 Vocab size: 65
 Total available data size: 1.12e+06 (using 5.10e+04)
 Receptive field: 29
@@ -113,6 +114,6 @@ tchith to tof, an, rie in do iurthe in aba s
 Epoch 61/100 | avg training loss 2.3123 | validation loss 2.3965 | eta 39.4m
 Epoch 62/100 | avg training loss 2.3073 | validation loss 2.3927 | eta 38.4m
 Epoch 63/100 | avg training loss 2.3024 | validation loss 2.3890 | eta 37.4m
-
+'''
 ## English GAN
 Next, I wanted to experiment with GANs and learn basics of Pytorch. The idea is to use the GAN framework to generate fake English words. Data from https://github.com/dwyl/english-words.
