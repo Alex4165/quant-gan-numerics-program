@@ -20,15 +20,15 @@ def get_training_batch(idx, data, batch_length):
 if __name__ == "__main__":
     # --- hyperparameters ---
     # training
-    learning_rate = 0.00005
+    learning_rate = 0.0001
     rho_1, rho_2 = 0.9, 0.999  # Adam params. Set rho_2=0 for bias corrected momentum only
     dropout_input_p_keep = 1  # the model is really sensitive to dropout, so we turn it off for now
     dropout_hidden_p_keep = 1
 
-    max_epochs = 1500
+    max_epochs = 100
     validation_size = 1000
     data_index = 50000
-    batch_size = 1000
+    batch_size = 100
     # batch_size = np.ceil(1e-2 * data_index).astype(int) if data_index > 0 else 100
     # number of backprop steps = O(data_size * epochs)
 
