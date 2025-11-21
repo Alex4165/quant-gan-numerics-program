@@ -20,10 +20,10 @@ def get_training_batch(idx, data, batch_length):
 if __name__ == "__main__":
     # --- hyperparameters ---
     # training
-    learning_rate = 0.0001
+    learning_rate = 0.0002
     rho_1, rho_2 = 0.9, 0.999  # Adam params. Set rho_2=0 for bias corrected momentum only
-    dropout_input_p_keep = 1  # the model is really sensitive to dropout, so we turn it off for now
-    dropout_hidden_p_keep = 1
+    dropout_input_p_keep = 1  # doesn't work right now. Leave at 1
+    dropout_hidden_p_keep = 0.5
 
     max_epochs = 100
     validation_size = 1000
@@ -33,8 +33,8 @@ if __name__ == "__main__":
     # number of backprop steps = O(data_size * epochs)
 
     # model
-    copies = 1  # copies of kernel-dilation list, so final_depth = depth * copies, see below
-    depth = 3  # we use less depth to decrease gradient explosion/vanishing
+    copies = 2  # copies of kernel-dilation list, so final_depth = depth * copies, see below
+    depth = 2  # we use less depth to decrease gradient explosion/vanishing
     kernel_size = 5  # larger kernels effectively allow the network to memorize words
     dilation_size = 2  # dilation still allows large receptive field
     hidden_size = 70  # (larger than) vocab size is a natural choice
@@ -42,8 +42,8 @@ if __name__ == "__main__":
 
     # generation
     seed_text = "To be, or not to be"
-    generation_length = 50
-    num_plots_shown = 5
+    generation_length = 1000
+    num_plots_shown = 10
 
     # --- data ---
     file = "input.txt"
@@ -100,13 +100,13 @@ if __name__ == "__main__":
             elif e == 0 and i == 10:
                 print(f"ETA: {(time.time() - t0) / 10 * num_batches * max_epochs / 60:.1f}m")
             if l > 30:
-                print(f"Warning blew up. Reduce learning rate from {learning_rate}")
+                print(f"Warning: Error blew up. Reduce learning rate from {learning_rate}")
                 break
             training_losses[i] = l
         if e % (max_epochs // num_plots_shown) == 0:
             plt.plot(training_losses)
             plt.title(f"Epoch {e + 1} training losses")
-            plt.xlabel("Character predicted")
+            plt.xlabel("Batch")
             plt.ylabel("Loss")
             plt.axhline(y=np.log(vocab_size), color='r', linestyle='--', label='random guess loss')
             plt.show()
@@ -165,3 +165,5 @@ if __name__ == "__main__":
 
     with open("model_checkpoint.pkl", "wb") as f:
         pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print("Done, thanks, that data was delicious")

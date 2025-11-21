@@ -19,8 +19,8 @@ def softmax(x):
 
 class VanillaTCN:
     def __init__(self, input_size: int, dilations: List[int], kernel_sizes: List[int], hidden_sizes: List[int],
-                 weight_scale: float = 0.1, bias_init: float = 0.1, input_p_keep=1.0, hidden_p_keep=1.0,
-                 grad_clip: float = 1.0):
+                 weight_scale: float = 0.01, bias_init: float = 0.1, input_p_keep=1.0, hidden_p_keep=1.0,
+                 grad_clip: float = 1):
         self.input_size = input_size
         self.dilations = dilations
         self.kernel_sizes = kernel_sizes
@@ -36,6 +36,8 @@ class VanillaTCN:
         self.node_vals = [0 for _ in range(self.depth + 1)]  # to store intermediate values for backpropagation
 
         self.used_node_idx = self.initialize_used_node_indices()
+        self.input_mask = np.ones((input_size, self.T_f), dtype=np.float32)  # for dropout
+        self.hidden_masks = [np.ones((h, self.T_f), dtype=np.float32) for h in hidden_sizes]  # for dropout
         self.weights, self.dw = self.initalize_weights(weight_scale)
         self.biases, self.db = [bias_init + np.zeros((h,)) for h in hidden_sizes], [np.zeros((h,)) for h in
                                                                                     hidden_sizes]
@@ -134,7 +136,7 @@ class VanillaTCN:
                 flat_idx = idx_prev.ravel()
                 np.add.at(dL_df, (slice(None), flat_idx), contrib_flat)
 
-            dL_dphi = dL_df * grad_leaky_re_lu(self.node_vals[i])
+            dL_dphi = dL_df * grad_leaky_re_lu(self.node_vals[i]) * self.hidden_masks[i]
 
             js = self.used_node_idx[i].nonzero()[0]
             if js.size:
@@ -151,11 +153,15 @@ class VanillaTCN:
 
     def forward_pass(self, inputs, target=None, do_dropout=True):
         # inputs shape: (input_size, T_f)
-        if do_dropout:
-            mask = (np.random.rand(*inputs.shape) < self.input_p_keep).astype(np.float32)
-            layer_input = mask * inputs / self.input_p_keep
-        else:
-            layer_input = inputs
+
+        # if do_dropout:
+        #     mask = (np.random.rand(*inputs.shape) < self.input_p_keep).astype(np.float32)
+        #     self.input_mask = mask / self.input_p_keep
+        #     layer_input = mask * self.input_mask
+        # else:
+        #     self.input_mask = np.ones_like(inputs, dtype=np.float32)
+        #     layer_input = inputs
+        layer_input = inputs
 
         for i in reversed(range(self.depth)):
             # dilated causal convolution
@@ -173,12 +179,16 @@ class VanillaTCN:
 
             if do_dropout and i > 2:  # no dropout on final three layers (since sparse)
                 mask = (np.random.rand(*layer_output.shape) < self.hidden_p_keep).astype(np.float32)
-                layer_output *= mask / self.hidden_p_keep  # weight scaling done during training
+                scaled_mask = mask / self.hidden_p_keep
+                layer_output *= scaled_mask  # weight-scaling done during training
+                self.hidden_masks[i] = scaled_mask
+            else:
+                self.hidden_masks[i] = np.ones_like(layer_output, dtype=np.float32)
 
             if i != 0:
                 layer_input = leaky_re_lu(layer_output)
             else:
-                layer_output += inputs  # identity skip connection on most recent input
+                layer_output += inputs  # identity skip connection (effectively on most recent input)
                 layer_input = softmax(layer_output[:, -1])  # only last time step is relevant for output
 
             self.node_vals[i] = layer_output  # store pre-activation values for backprop
