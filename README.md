@@ -1,4 +1,5 @@
 Run main.py to initiate training of the model.
+You can change input.txt to be any text file you want the model to train on.
 
 ## Comments
 Primary goal was to experiment with (vanilla) Temporal Convolutional Networks (TCN), in particular test their performance and become more comfortable with the architecture.
