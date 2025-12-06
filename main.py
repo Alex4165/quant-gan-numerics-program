@@ -20,7 +20,7 @@ def get_training_batch(idx, data, batch_length):
 if __name__ == "__main__":
     # --- hyperparameters ---
     # training
-    learning_rate = 0.0002
+    learning_rate = 0.0001
     rho_1, rho_2 = 0.9, 0.999  # Adam params. Set rho_2=0 for bias corrected momentum only
     dropout_input_p_keep = 1  # doesn't work right now. Leave at 1
     dropout_hidden_p_keep = 0.5
@@ -34,7 +34,7 @@ if __name__ == "__main__":
 
     # model
     copies = 2  # copies of kernel-dilation list, so final_depth = depth * copies, see below
-    depth = 2  # we use less depth to decrease gradient explosion/vanishing
+    depth = 3  # we use less depth to decrease gradient explosion/vanishing
     kernel_size = 5  # larger kernels effectively allow the network to memorize words
     dilation_size = 2  # dilation still allows large receptive field
     hidden_size = 70  # (larger than) vocab size is a natural choice
